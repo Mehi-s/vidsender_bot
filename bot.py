@@ -1,11 +1,11 @@
 import os
 import sqlite3
-from telegram import Update, InputFile
+from telegram import Update, InputFile, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 
 # رمز ادمین برای آپلود ویدیو
-ADMIN_PASSWORD = "vid2024sender"
+ADMIN_PASSWORD = "vidsender2024"
 
 # دیتابیس برای ذخیره ویدیوها و شماره تلفن‌ها
 def init_db():
@@ -69,6 +69,14 @@ def verify_phone(phone):
     conn.commit()
     conn.close()
 
+# حذف شماره تلفن از لیست تأییدشده
+def delete_verified_phone(phone):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE phone=?", (phone,))
+    conn.commit()
+    conn.close()
+
 # افزودن واترمارک به ویدیو با moviepy
 def add_watermark(input_video, output_video, watermark_text):
     video = VideoFileClip(input_video)
@@ -80,6 +88,21 @@ def add_watermark(input_video, output_video, watermark_text):
     # ترکیب واترمارک با ویدیو
     final_video = CompositeVideoClip([video, watermark])
     final_video.write_videofile(output_video, codec='libx264')
+
+# کیبورد دستورات
+def main_menu_keyboard():
+    keyboard = [
+        ['/upload_video', '/verify', '/remove_verified'],
+        ['/request_video', '/start']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# دستور شروع و نمایش کیبورد
+async def start(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        'سلام! از منوی زیر یکی از دستورات را انتخاب کنید.',
+        reply_markup=main_menu_keyboard()
+    )
 
 # دریافت ویدیو توسط ادمین با رمز
 async def receive_video(update: Update, context: CallbackContext):
@@ -99,14 +122,6 @@ async def receive_video(update: Update, context: CallbackContext):
     video_link = f"http://your_bot_url.com/video/{video_id}"
     await update.message.reply_text(f'لینک ویدیو: {video_link}')
 
-# دریافت لینک ویدیو و درخواست شماره تلفن
-async def handle_video_link(update: Update, context: CallbackContext):
-    video_id = context.args[0]
-    phone = update.message.text  # شماره تلفن کاربر
-
-    save_phone(phone)  # ذخیره شماره تلفن در دیتابیس
-    await update.message.reply_text(f'شماره {phone} ثبت شد. لطفا منتظر تأیید ادمین باشید.')
-
 # تأیید شماره تلفن توسط ادمین
 async def verify_user(update: Update, context: CallbackContext):
     if len(context.args) != 1:
@@ -116,6 +131,16 @@ async def verify_user(update: Update, context: CallbackContext):
     phone = context.args[0]
     verify_phone(phone)
     await update.message.reply_text(f'شماره {phone} با موفقیت تأیید شد.')
+
+# حذف شماره تلفن از لیست تأیید شده
+async def remove_verified(update: Update, context: CallbackContext):
+    if len(context.args) != 1:
+        await update.message.reply_text('لطفا شماره تلفن مورد نظر برای حذف را وارد کنید.')
+        return
+    
+    phone = context.args[0]
+    delete_verified_phone(phone)
+    await update.message.reply_text(f'شماره {phone} با موفقیت حذف شد.')
 
 # ارسال ویدیو پس از تأیید شماره تلفن
 async def request_video(update: Update, context: CallbackContext):
@@ -136,9 +161,6 @@ async def request_video(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text('شماره تلفن شما تأیید نشده است.')
 
-async def start(update: Update, context: CallbackContext):
-    await update.message.reply_text('سلام! برای استفاده از ربات، شماره تلفن خود را وارد کنید.')
-
 # تنظیم ربات
 def main():
     # اجرای دیتابیس
@@ -150,8 +172,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("upload_video", receive_video))
     app.add_handler(CommandHandler("verify", verify_user))
-    app.add_handler(MessageHandler(filters.Regex(r'^http://your_bot_url.com/video/(\d+)$'), handle_video_link))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, request_video))
+    app.add_handler(CommandHandler("remove_verified", remove_verified))
+    app.add_handler(CommandHandler("request_video", request_video))
 
     app.run_polling()
 
