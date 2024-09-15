@@ -1,7 +1,7 @@
 import os
 import sqlite3
-from telegram import Update, InputFile, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 
 # رمز ادمین برای آپلود ویدیو
@@ -44,39 +44,6 @@ def get_video_by_id(video_id):
     conn.close()
     return result[0] if result else None
 
-# بررسی تأیید شماره تلفن
-def is_verified(phone):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT is_verified FROM users WHERE phone=?", (phone,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] == 1 if result else False
-
-# ذخیره شماره تلفن در دیتابیس
-def save_phone(phone):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO users (phone, is_verified) VALUES (?, ?)", (phone, 0))
-    conn.commit()
-    conn.close()
-
-# تأیید شماره تلفن توسط ادمین
-def verify_phone(phone):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_verified = 1 WHERE phone=?", (phone,))
-    conn.commit()
-    conn.close()
-
-# حذف شماره تلفن از لیست تأییدشده
-def delete_verified_phone(phone):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE phone=?", (phone,))
-    conn.commit()
-    conn.close()
-
 # افزودن واترمارک به ویدیو با moviepy
 def add_watermark(input_video, output_video, watermark_text):
     video = VideoFileClip(input_video)
@@ -89,77 +56,77 @@ def add_watermark(input_video, output_video, watermark_text):
     final_video = CompositeVideoClip([video, watermark])
     final_video.write_videofile(output_video, codec='libx264')
 
-# کیبورد دستورات
-def main_menu_keyboard():
-    keyboard = [
-        ['/upload_video', '/verify', '/remove_verified'],
-        ['/request_video', '/start']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# مدیریت شماره تلفن‌ها: افزودن و حذف
+def add_verified_phone(phone_number):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (phone, is_verified) VALUES (?, 1)", (phone_number,))
+    conn.commit()
+    conn.close()
 
-# دستور شروع و نمایش کیبورد
-async def start(update: Update, context: CallbackContext):
-    await update.message.reply_text(
-        'سلام! از منوی زیر یکی از دستورات را انتخاب کنید.',
-        reply_markup=main_menu_keyboard()
-    )
+def remove_verified_phone(phone_number):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE phone=?", (phone_number,))
+    conn.commit()
+    conn.close()
 
-# دریافت ویدیو توسط ادمین با رمز
-async def receive_video(update: Update, context: CallbackContext):
-    if len(context.args) != 1 or context.args[0] != ADMIN_PASSWORD:
-        await update.message.reply_text('دسترسی غیرمجاز! رمز اشتباه است.')
-        return
-    
-    video_file = await update.message.video.get_file()
-    video_path = f'{video_file.file_id}.mp4'
-    await video_file.download_to_drive(video_path)
+# درخواست رمز عبور از ادمین
+async def request_password(update: Update, context: CallbackContext):
+    keyboard = [[InlineKeyboardButton("Enter Password", callback_data='enter_password')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('برای آپلود ویدیو، رمز عبور خود را وارد کنید:', reply_markup=reply_markup)
 
-    save_video(video_path)
-    await update.message.reply_text('ویدئو با موفقیت ذخیره شد.')
+# دریافت رمز عبور و اعتبارسنجی
+async def button_click(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
 
-    # ایجاد لینک ویدیو
-    video_id = get_last_video_id()
-    video_link = f"http://your_bot_url.com/video/{video_id}"
-    await update.message.reply_text(f'لینک ویدیو: {video_link}')
+    if query.data == 'enter_password':
+        await query.message.reply_text('لطفا رمز عبور را وارد کنید:')
+        context.user_data['awaiting_password'] = True
 
-# تأیید شماره تلفن توسط ادمین
-async def verify_user(update: Update, context: CallbackContext):
-    if len(context.args) != 1:
-        await update.message.reply_text('لطفا شماره تلفن مورد نظر برای تأیید را وارد کنید.')
-        return
-    
-    phone = context.args[0]
-    verify_phone(phone)
-    await update.message.reply_text(f'شماره {phone} با موفقیت تأیید شد.')
-
-# حذف شماره تلفن از لیست تأیید شده
-async def remove_verified(update: Update, context: CallbackContext):
-    if len(context.args) != 1:
-        await update.message.reply_text('لطفا شماره تلفن مورد نظر برای حذف را وارد کنید.')
-        return
-    
-    phone = context.args[0]
-    delete_verified_phone(phone)
-    await update.message.reply_text(f'شماره {phone} با موفقیت حذف شد.')
-
-# ارسال ویدیو پس از تأیید شماره تلفن
-async def request_video(update: Update, context: CallbackContext):
-    video_id = context.args[0]
-    phone = update.message.text  # شماره تلفن کاربر
-
-    if is_verified(phone):  # بررسی تأیید شماره تلفن
-        video_path = get_video_by_id(video_id)
-        if video_path:
-            watermarked_video = f'watermarked_{phone}.mp4'
-            add_watermark(video_path, watermarked_video, phone)
-
-            # ارسال ویدیو واترمارک شده
-            with open(watermarked_video, 'rb') as f:
-                await update.message.reply_video(video=InputFile(f))
+# دریافت ویدیو از ادمین پس از تأیید رمز عبور
+async def receive_password_message(update: Update, context: CallbackContext):
+    if 'awaiting_password' in context.user_data and context.user_data['awaiting_password']:
+        password = update.message.text
+        if password == ADMIN_PASSWORD:
+            await update.message.reply_text('رمز عبور صحیح است! اکنون ویدیوی خود را آپلود کنید.')
+            context.user_data['awaiting_password'] = False
+            context.user_data['admin_verified'] = True
         else:
-            await update.message.reply_text('ویدئویی برای ارسال وجود ندارد.')
+            await update.message.reply_text('رمز عبور اشتباه است! لطفا دوباره تلاش کنید.')
+            context.user_data['awaiting_password'] = False
+    elif 'admin_verified' in context.user_data and context.user_data['admin_verified']:
+        video_file = await update.message.video.get_file()
+        video_path = f'{video_file.file_id}.mp4'
+        await video_file.download_to_drive(video_path)
+
+        save_video(video_path)
+        video_id = get_last_video_id()
+        video_link = f"http://your_bot_url.com/video/{video_id}"
+        await update.message.reply_text(f'ویدئو با موفقیت ذخیره شد. لینک ویدیو: {video_link}')
+        context.user_data['admin_verified'] = False
     else:
-        await update.message.reply_text('شماره تلفن شما تأیید نشده است.')
+        await update.message.reply_text('لطفا ابتدا رمز عبور را وارد کنید.')
+
+# افزودن شماره تلفن وریفای شده
+async def add_phone(update: Update, context: CallbackContext):
+    if len(context.args) != 1:
+        await update.message.reply_text('لطفا شماره تلفن را به درستی وارد کنید. مثال: /add_phone 09123456789')
+        return
+    phone_number = context.args[0]
+    add_verified_phone(phone_number)
+    await update.message.reply_text(f'شماره {phone_number} با موفقیت اضافه شد.')
+
+# حذف شماره تلفن وریفای شده
+async def remove_phone(update: Update, context: CallbackContext):
+    if len(context.args) != 1:
+        await update.message.reply_text('لطفا شماره تلفن را به درستی وارد کنید. مثال: /remove_phone 09123456789')
+        return
+    phone_number = context.args[0]
+    remove_verified_phone(phone_number)
+    await update.message.reply_text(f'شماره {phone_number} با موفقیت حذف شد.')
 
 # تنظیم ربات
 def main():
@@ -169,11 +136,11 @@ def main():
     app = ApplicationBuilder().token("7296810348:AAERX18ArzzCRNCRbUEiaOiRNmiVGkyV3oo").build()
 
     # دستورات
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("upload_video", receive_video))
-    app.add_handler(CommandHandler("verify", verify_user))
-    app.add_handler(CommandHandler("remove_verified", remove_verified))
-    app.add_handler(CommandHandler("request_video", request_video))
+    app.add_handler(CommandHandler("upload_video", request_password))
+    app.add_handler(CommandHandler("add_phone", add_phone))
+    app.add_handler(CommandHandler("remove_phone", remove_phone))
+    app.add_handler(CallbackQueryHandler(button_click))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.TEXT, receive_password_message))
 
     app.run_polling()
 
