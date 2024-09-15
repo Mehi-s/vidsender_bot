@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from telegram import Update, InputFile
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 
@@ -163,19 +163,42 @@ async def receive_contact(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text('شماره شما وریفای نشده است. لطفاً با ادمین تماس بگیرید.')
 
-# آپلود ویدیو توسط ادمین
-async def upload_video(update: Update, context: CallbackContext):
-    if update.message.from_user.id == ADMIN_ID:  # چک کردن دسترسی ادمین
-        video_file = await update.message.video.get_file()
-        video_path = f'{video_file.file_id}.mp4'
-        await video_file.download_to_drive(video_path)
+# ایجاد منو
+async def menu(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("Upload Video", callback_data='upload_video')],
+        [InlineKeyboardButton("Add Verified Phone", callback_data='add_verified_phone')],
+        [InlineKeyboardButton("Remove Verified Phone", callback_data='remove_verified_phone')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('لطفاً یک گزینه را انتخاب کنید:', reply_markup=reply_markup)
 
-        save_video(video_path)
-        video_id = get_last_video_id()
-        video_link = generate_video_link(video_id)
-        await update.message.reply_text(f'ویدیو با موفقیت ذخیره شد. لینک ویدیو: {video_link}')
-    else:
-        await update.message.reply_text('شما دسترسی لازم برای آپلود ویدیو را ندارید.')
+async def menu_button_click(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'upload_video':
+        await request_password(query.message, context)
+    elif query.data == 'add_verified_phone':
+        await query.message.reply_text('لطفاً شماره تلفن را وارد کنید که می‌خواهید اضافه کنید:')
+        context.user_data['action'] = 'add_verified_phone'
+    elif query.data == 'remove_verified_phone':
+        await query.message.reply_text('لطفاً شماره تلفن را وارد کنید که می‌خواهید حذف کنید:')
+        context.user_data['action'] = 'remove_verified_phone'
+
+async def handle_verified_phone(update: Update, context: CallbackContext):
+    if 'action' in context.user_data:
+        phone_number = update.message.text
+        action = context.user_data['action']
+
+        if action == 'add_verified_phone':
+            add_verified_phone(phone_number)
+            await update.message.reply_text(f'شماره {phone_number} با موفقیت اضافه شد.')
+        elif action == 'remove_verified_phone':
+            remove_verified_phone(phone_number)
+            await update.message.reply_text(f'شماره {phone_number} با موفقیت حذف شد.')
+
+        context.user_data['action'] = None
 
 # تنظیم ربات
 def main():
@@ -184,12 +207,13 @@ def main():
 
     app = ApplicationBuilder().token("7296810348:AAERX18ArzzCRNCRbUEiaOiRNmiVGkyV3oo").build()
 
-    # دستورات
+    # افزودن هندلرها
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("upload_video", request_password))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_password_message))
     app.add_handler(MessageHandler(filters.CONTACT, receive_contact))
-    app.add_handler(MessageHandler(filters.VIDEO, receive_password_message))
+    app.add_handler(CallbackQueryHandler(menu_button_click))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verified_phone))
 
+    # راه‌اندازی ربات
     app.run_polling()
-
 main()
